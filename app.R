@@ -19,7 +19,7 @@ library(shinydashboard)
 #####################
 # Consider IRANGES
 #####################
-get_ext = function(file){
+get_ext = function(file) {
   file = tolower(file)
   file = basename(file)
   ext = tools::file_ext(file)
@@ -28,7 +28,7 @@ get_ext = function(file){
       file = file_path_sans_ext(file)
       ext = file_ext(file)
       ext = paste0(ext, ".gz")
-    } 
+    }
   } else {
     ext = NA
   }
@@ -40,35 +40,50 @@ get_ext = function(file){
 
 ui <- dashboardPage(
   dashboardHeader(title = "ICH Segmentation"),
-  dashboardSidebar(
-    sidebarMenu(
-      menuItem("Upload Images", 
-               tabName = "upload_data", 
-               icon = icon("glyphicon glyphicon-upload")),
-      menuItem("Processing", tabName = "widgets", 
-               icon = icon("glyphicon glyphicon-cog"))
-    )    
-  ),
-  dashboardBody(
-    tabItems(
-      # First tab content
-      tabItem(tabName = "upload_data",
-              fileInput(inputId = 'fnames', 
-                        label = 'Choose Images (NIfTI or DICOM series)',
-                        multiple = TRUE),
-              # accept = c('.dcm')),
-              textOutput("dcm_out"),
-              uiOutput("which_series"),
-              plotOutput("each_dicom")
-              
-      )
+  dashboardSidebar(sidebarMenu(
+    menuItem(
+      "Upload Images",
+      tabName = "upload_data",
+      icon = icon("glyphicon glyphicon-upload")
+    ),
+    menuItem(
+      "Processing",
+      tabName = "widgets",
+      icon = icon("glyphicon glyphicon-cog")
     )
-  )
+  )),
+  dashboardBody(tabItems(
+    # First tab content
+    tabItem(
+      tabName = "upload_data",
+      fileInput(
+        inputId = 'fnames',
+        label = 'Choose Images (NIfTI or DICOM series)',
+        multiple = TRUE
+      ),
+      # accept = c('.dcm')),
+      textOutput("dcm_out"),
+      uiOutput("which_series"),
+      plotOutput("each_dicom")
+      
+    ),
+    # Second tab content
+    tabItem(
+      tabName = "widgets",
+      # plotOutput("each_dicom"),
+      actionButton("run_processing", label = "Run Processing"),
+      verbatimTextOutput("proc_output"),
+      plotOutput("preprocess_plot"),
+      plotOutput("unsmooth_plot"),
+      plotOutput("smooth_plot")
+      
+    )
+  ))
 )
 
 
 
-server <- function(input, output) {
+server <- function(input, output, session) {
   # Objects in this file are defined in each session
   # source('read_img.R', local=TRUE)
   
@@ -89,7 +104,7 @@ server <- function(input, output) {
     ###################
     niis = grepl("nii", inFile$ext)
     if (any(niis)) {
-      xx = inFile[niis, ]
+      xx = inFile[niis,]
       outfiles = file.path(dirname(xx$datapath), xx$name)
       file.rename(xx$datapath, outfiles)
       inFile$datapath[niis] = outfiles
@@ -97,11 +112,11 @@ server <- function(input, output) {
     
     print("grepped it")
     print(inFile)
-
     
-    # inFile$ext[ !is.na(inFile$ext)] = paste0(".", 
+    
+    # inFile$ext[ !is.na(inFile$ext)] = paste0(".",
     #                                          inFile$ext[ !is.na(inFile$ext)])
-    # 
+    #
     # inFile$ext[is.na(inFile$ext)] = ""
     # # files now have extensions
     # inFile$outfile = paste0(inFile$datapath, inFile$ext)
@@ -113,8 +128,8 @@ server <- function(input, output) {
     # print(outdir)
     # print(inFile)
     if (!is.null(outdir)) {
-      sd = dcm2nii(basedir = outdir, 
-                   dcm2niicmd = "dcm2niix", 
+      sd = dcm2nii(basedir = outdir,
+                   dcm2niicmd = "dcm2niix",
                    copy_files = FALSE)
       print(dir(outdir))
     } else {
@@ -127,19 +142,19 @@ server <- function(input, output) {
     dcm_output = get_data()
     print("dcm_output is")
     print(dcm_output)
-    if (!is.null(dcm_output)){
+    if (!is.null(dcm_output)) {
       # just getting filenames
       nifti_images = check_dcm2nii(dcm_output)
       nifti_images = c(dcm_output$nii_before, nifti_images)
       # nifti_images$nifti_
-      if (length(nifti_images) == 0 ){ 
+      if (length(nifti_images) == 0) {
         nifti_images = NULL
       } else {
         print("pre unique")
         print(nifti_images)
         nifti_images = unique(nifti_images)
         print("post unique")
-        print(nifti_images)        
+        print(nifti_images)
       }
     } else {
       nifti_images = NULL
@@ -153,6 +168,9 @@ server <- function(input, output) {
   })
   
   
+  ################################
+  # Gets series filenames
+  ################################
   get_unique_series = reactive({
     sd = get_simple_data()
     if (!is.null(sd)) {
@@ -164,16 +182,18 @@ server <- function(input, output) {
   })
   
   ## CHANGE HERE
-  ## Set up buffert, to keep the click.
+  ## Set up buffer to keep the index
   series_indexer <- reactiveValues(which_index = 1)
   
   ## CHANGE HERE
-  ## Save the click, once it occurs.
+  ## Save the selection when occurs
   observe({
-    series_indexer$which_index <- input$selected_series
+    if (!is.null(input$selected_series)) {
+      series_indexer$which_index <- input$selected_series
+    }
   })
   
-  # find if more than one 
+  # find if more than one
   output$which_series = renderUI({
     usd = get_unique_series()
     print(usd)
@@ -181,46 +201,101 @@ server <- function(input, output) {
       return(NULL)
     }
     if (length(usd) > 1) {
-      selectInput("selected_series", label = "Which Series", choices = usd)
+      selectInput("selected_series",
+                  label = "Which Series",
+                  choices = usd)
     } else {
-      ## need reactiveValues here
-      # input$selected_series = usd
+      
     }
   })
   
   
-  
-  output$each_dicom = renderPlot({
+  the_image = reactive({
     sd = get_simple_data()
     if (!is.null(sd)) {
       print("sd is")
       print(sd)
+      usd = unique(basename(sd))
+      names(sd) = usd
       sd = check_nifti(sd)
       # sd = readnii(sd)
       if (is.nifti(sd)) {
-        img = sd
-      } else {
-        img = sd[[series_indexer$which_index]]
+        sd = list(sd)
+        names(sd) = usd
       }
-      ortho2(img)
-      
-      # sd = sd %>% dplyr::slice(1)
-      # imgs = lapply(sd$path, readDICOMFile)
-      # print(names(imgs))
-      # imgs = lapply(imgs, function(x) {
-      #   x$img
-      # })
-      # names(imgs) = paste0("Series Number:", sd$seriesNumber)
-      # n_imgs = length(imgs)
-      # par(mfrow = c(1, n_imgs))
-      # mapply(function(img, main) {
-      #   graphics::image(img, col = gray(0:64/64), main = main)
-      # }, imgs, names(imgs))
-      # par(mfrow =c(1,1))
-      # sapply()
+      sd = lapply(sd,
+                  window_img,
+                  window = c(-1024, 3071),
+                  replace = "window")
+      # } else {
+      print("Series Index stuff")
+      print(series_indexer$which_index)
+      img = sd[[series_indexer$which_index]]
+      # }
+    } else {
+      img = NULL
     }
-    # plot(0, 0)
-  })    
+    img 
+  })
+  
+  output$each_dicom = renderPlot({
+    img = the_image()
+    if (!is.null(img)) {
+      ortho2(img, window = c(0, 100))
+    }
+  })
+  
+  # run_processing
+  v <- reactiveValues(run_the_stuff = FALSE)
+  
+  observeEvent(input$run_processing, {
+    # 0 will be coerced to FALSE
+    # 1+ will be coerced to TRUE
+    v$run_the_stuff <- input$run_processing
+  })
+  
+  
+  values <- reactiveValues()
+  
+  
+  
+  
+  logText <- reactive({
+    img = the_image()
+    values[["log"]] <- capture.output({
+      result <- ich_segment(img = img)
+    })
+    result
+  })
+  
+  observe({
+    if (v$run_the_stuff == FALSE) return()
+    isolate({
+      print("Why are you already in the thing")
+      
+      result = logText()
+      output$proc_output <- renderPrint({
+        logText()
+        return(print(values[["log"]]))
+        # You could also use grep("Warning", values[["log"]]) to get warning messages and use shinyBS package
+        # to create alert message
+      })  
+      output$preprocess_plot = renderPlot({
+        ortho2(img, result$preprocess$mask,
+               col.y = scales::alpha("red", 0.5))
+      })
+      output$unsmooth_plot = renderPlot({
+        ortho2(img, result$native_prediction$prediction_image,
+               col.y = scales::alpha("red", 0.5))
+      })      
+      output$smooth_plot = renderPlot({
+        ortho2(img, result$native_prediction$smoothed_prediction_image,
+               col.y = scales::alpha("red", 0.5))
+      })          
+    })  
+    
+  })
+  
   
   
   
