@@ -1,0 +1,44 @@
+\documentclass{article}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows}
+\usetikzlibrary{positioning}
+\usepackage{verbatim}
+\usepackage[active,tightpage]{preview}
+\PreviewEnvironment{tikzpicture}
+\begin{document}
+\pagestyle{empty}
+% Define block styles
+
+\tikzstyle{bblock} = [rectangle, draw, text width=8em, text centered, minimum height=2em, rounded corners]
+\tikzstyle{line} = [draw, text centered , -latex']
+\tikzstyle{line node} = [draw, fill=white, font=\tiny ]
+\tikzstyle{block} = [rectangle, draw, text width=5em, text centered, minimum height=4em, rounded corners]    
+
+
+
+\begin{tikzpicture}[node distance = 1.5cm, every node/.style={rectangle,fill=white}, scale=0.75, transform shape]
+
+% Place nodes
+\node [bblock] (dcmnii) {Uploaded Data};
+
+\node [bblock, above = 2.5cm of dcmnii, left of=dcmnii] (dicom) {DICOM Series};
+\node [bblock, above = 2.5cm of dcmnii, right of=dcmnii] (nifti) {NIfTI images};
+
+\node [bblock, below = 1.5cm of dcmnii] (thresh) {Hemorrhage Estimation};
+\node [bblock, below = 1cm of thresh] (vol) {ICH Volume};
+\node [bblock, left = 1cm of vol] (loc) {ICH Location};
+\node [bblock, right = 1cm of vol] (masks) {Hemorrhage Image Masks};
+\node [bblock, below of=vol] (report) {Patient Report};
+
+% Draw edges
+\path [line] (dicom) -- node {Image Conversion} (dcmnii);
+\path [line] (nifti) -- (dcmnii);
+\path [line] (dcmnii) -- node {Image Processing} (thresh);
+\path [line] (thresh) -- (vol);
+\path [line] (thresh) -- (loc);
+\path [line] (thresh) -- (masks);
+\path [line] (vol) -- (report);
+
+\end{tikzpicture}
+
+\end{document}
