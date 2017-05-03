@@ -9,6 +9,8 @@ library(neurobase)
 library(dcmtk)
 library(dplyr)
 library(tools)
+library(shinyjs)
+library(papayaWidget)
 
 options(shiny.maxRequestSize = 50 * 1024 ^ 2)
 
@@ -38,47 +40,75 @@ get_ext = function(file) {
   return(ext)
 }
 
+
+
+download_img = function(outimg, file, gzipped = TRUE){
+  ff = nii.stub(file)
+  # print(ff)
+  writenii(outimg,
+           filename = ff,
+           gzipped = gzipped)
+  ext = ifelse(gzipped, ".nii.gz", ".nii")
+  file.rename(paste0(ff, ext), file)
+  return(file)
+}
+
+
 ui <- dashboardPage(
   dashboardHeader(title = "ICH Segmentation"),
   dashboardSidebar(sidebarMenu(
     menuItem(
       "Upload Images",
       tabName = "upload_data",
-      icon = icon("glyphicon glyphicon-upload")
+      icon = icon("upload", lib = "glyphicon")
     ),
     menuItem(
       "Processing",
       tabName = "widgets",
-      icon = icon("glyphicon glyphicon-cog")
+      icon = icon("cog", lib = "glyphicon")
+    ),
+    menuItem(
+      "Output",
+      tabName = "download",
+      icon = icon("download", lib = "glyphicon")
     )
   )),
-  dashboardBody(tabItems(
-    # First tab content
-    tabItem(
-      tabName = "upload_data",
-      fileInput(
-        inputId = 'fnames',
-        label = 'Choose Images (NIfTI or DICOM series)',
-        multiple = TRUE
+  dashboardBody(
+    useShinyjs(),
+    tabItems(
+      # First tab content
+      tabItem(
+        tabName = "upload_data",
+        fileInput(
+          inputId = 'fnames',
+          label = 'Choose Images (NIfTI or DICOM series)',
+          multiple = TRUE
+        ),
+        # accept = c('.dcm')),
+        textOutput("dcm_out"),
+        uiOutput("which_series"),
+        plotOutput("each_dicom")
+        # papayaWidgetOutput("each_dicom")
+        
       ),
-      # accept = c('.dcm')),
-      textOutput("dcm_out"),
-      uiOutput("which_series"),
-      plotOutput("each_dicom")
-      
-    ),
-    # Second tab content
-    tabItem(
-      tabName = "widgets",
-      # plotOutput("each_dicom"),
-      actionButton("run_processing", label = "Run Processing"),
-      verbatimTextOutput("proc_output"),
-      plotOutput("preprocess_plot"),
-      plotOutput("unsmooth_plot"),
-      plotOutput("smooth_plot")
-      
-    )
-  ))
+      # Second tab content
+      tabItem(
+        tabName = "widgets",
+        # plotOutput("each_dicom"),
+        actionButton("run_processing", label = "Run Processing"),
+        verbatimTextOutput("proc_output"),
+        plotOutput("preprocess_plot"),
+        plotOutput("unsmooth_plot"),
+        plotOutput("smooth_plot")
+        
+      ),
+      tabItem(
+        tabName = "download",    
+        dataTableOutput("table")
+        downloadButton('download', 'Download All Output'),
+        downloadButton('download_pred', 'Download Prediction Image Only')    
+      )
+    ))
 )
 
 
@@ -86,6 +116,8 @@ ui <- dashboardPage(
 server <- function(input, output, session) {
   # Objects in this file are defined in each session
   # source('read_img.R', local=TRUE)
+  
+  
   
   get_data = reactive({
     inFile <- input$fnames
@@ -232,6 +264,7 @@ server <- function(input, output, session) {
       print(series_indexer$which_index)
       img = sd[[series_indexer$which_index]]
       # }
+      shinyjs::enable("run_processing") 
     } else {
       img = NULL
     }
@@ -244,6 +277,14 @@ server <- function(input, output, session) {
       ortho2(img, window = c(0, 100))
     }
   })
+  
+  # output$each_dicom = renderPapayaWidget({
+  #   img = the_image()
+  #   if (!is.null(img)) {
+  #     ortho2(img, window = c(0, 100))
+  #   }
+  # })
+  # 
   
   # run_processing
   v <- reactiveValues(run_the_stuff = FALSE)
@@ -262,9 +303,14 @@ server <- function(input, output, session) {
   
   logText <- reactive({
     img = the_image()
-    values[["log"]] <- capture.output({
-      result <- ich_segment(img = img)
-    })
+    # values[["log"]] <- capture.output({
+    withProgress(
+      message = "Starting ICH Segmentation",
+      expr = {
+        result <- ich_segment(img = img, shiny = TRUE)
+      })
+    # })
+    result$img = img
     result
   })
   
@@ -273,32 +319,93 @@ server <- function(input, output, session) {
     isolate({
       print("Why are you already in the thing")
       
-      result = logText()
       output$proc_output <- renderPrint({
-        logText()
+        result <<- logText()
+        shinyjs::enable(id = "download")
+        shinyjs::enable(id = "download_pred")            
         return(print(values[["log"]]))
         # You could also use grep("Warning", values[["log"]]) to get warning messages and use shinyBS package
         # to create alert message
       })  
       output$preprocess_plot = renderPlot({
-        ortho2(img, result$preprocess$mask,
-               col.y = scales::alpha("red", 0.5))
+        ortho2(result$img, result$preprocess$mask,
+               window = c(0, 100),
+               xyz = xyz(result$preprocess$mask),
+               col.y = scales::alpha("red", 0.5),
+               text = "Skull-Stripped Mask")
       })
       output$unsmooth_plot = renderPlot({
-        ortho2(img, result$native_prediction$prediction_image,
-               col.y = scales::alpha("red", 0.5))
+        ortho2(result$img, result$native_prediction$prediction_image,
+               window = c(0, 100),
+               xyz = xyz(result$native_prediction$prediction_image),
+               col.y = scales::alpha("red", 0.5),
+               text = "Binarized Prediction Image")
       })      
       output$smooth_plot = renderPlot({
-        ortho2(img, result$native_prediction$smoothed_prediction_image,
-               col.y = scales::alpha("red", 0.5))
+        ortho2(result$img, 
+               window = c(0, 100),
+               result$native_prediction$smoothed_prediction_image,
+               xyz = xyz(result$native_prediction$smoothed_prediction_image),
+               col.y = scales::alpha("red", 0.5),
+               text = "Smoothed, Binarized Prediction Image")
       })          
     })  
-    
+  })
+  
+  output$table = renderDataTable({
+    rimg = result$native_prediction$smoothed_prediction_image
+    if (is.null(rimg)) {
+      get_vol = function(x) {
+        vres = voxres(x, units = "cm")
+        sum(x) * vres
+      }
+      ich_vol = get_vol(rimg)
+      cran_vol = get_vol(result$preprocess$mask)
+      
+      df = data.frame(
+        measure = c("ICV Volume", "Hemorrhage Volume", "Location"),
+        value = c(cran_vol, ich_vol, NA),
+        stringsAsFactors = FALSE
+      )
+    } else {
+      df = ""
+    }
+    df
   })
   
   
   
+  output$download <- downloadHandler(
+    filename = 'output.rda',
+    content = function(file) {
+      save(result, file = file)
+    }
+  )
   
+  
+  output$download_pred <- downloadHandler(
+    filename = 'smoothed_prediction_image.nii.gz',
+    content = function(file) {
+      outimg = result$native_prediction$smoothed_prediction_image
+      
+      message("outimg")
+      # message(outimg)
+      print(outimg)
+      message("file")
+      message(file)
+      print(file)
+      
+      
+      gc(); gc();
+      download_img(outimg, file, gzipped = TRUE)
+      
+    }
+  )
+  
+  
+  shinyjs::disable("download")
+  shinyjs::disable("download_pred") 
+  shinyjs::disable("run_processing") 
   
 }
 
